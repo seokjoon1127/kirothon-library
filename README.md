@@ -54,6 +54,10 @@ WARNING_SENT → AVAILABLE (임계값 재도달, 자동 반납)
 ABSENT_EMPTY → AVAILABLE (임계값 도달, 자동 반납)
 ```
 
+## 로직
+
+![로직 플로우차트](docs/logic-flow.png)
+
 ## 시작하기
 
 ### 프론트엔드
