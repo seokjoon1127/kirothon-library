@@ -1,4 +1,7 @@
+![Ghost Seat Detector](docs/poster.png)
+
 # 🪑 Ghost Seat Detector — 도서관 좌석 유령 예약 감지 시스템
+
 
 카메라 1대로 번호표(1, 2, 3)가 부착된 3개 좌석을 촬영하고, Amazon Bedrock Claude Haiku로 AI 분석하여 유령 예약을 자동 감지·경고·반납 처리하는 시스템입니다.
 
