@@ -1,45 +1,38 @@
-import { API_BASE_URL } from './constants';
+const API_URL = 'https://hqhl33cpyc.execute-api.us-east-1.amazonaws.com/prod';
 
-async function request(path, options = {}) {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
+export async function getSeats() {
+  const res = await fetch(`${API_URL}/seats`);
+  return res.json();
+}
+
+export async function reserveSeat(seatId, studentId, studentName) {
+  const res = await fetch(`${API_URL}/reserve`, {
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    ...options,
+    body: JSON.stringify({ seat_id: seatId, student_id: studentId, student_name: studentName })
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `요청 실패 (${res.status})`);
-  return data;
+  return res.json();
 }
 
-/** 전체 좌석 조회 */
-export function getSeats() {
-  return request('/seats');
-}
-
-/** 좌석 예약 */
-export function reserveSeat(seatId, studentId, studentName) {
-  return request(`/seats/${seatId}/reserve`, {
+export async function cancelSeat(seatId, studentId) {
+  const res = await fetch(`${API_URL}/reserve`, {
     method: 'POST',
-    body: JSON.stringify({ student_id: studentId, student_name: studentName }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ seat_id: seatId, student_id: studentId, action: 'cancel' })
   });
+  return res.json();
 }
 
-/** 좌석 취소 */
-export function cancelSeat(seatId, studentId) {
-  return request(`/seats/${seatId}/cancel`, {
+export async function sendSnapshot(imageBase64) {
+  const res = await fetch(`${API_URL}/snapshot`, {
     method: 'POST',
-    body: JSON.stringify({ student_id: studentId }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: imageBase64 })
   });
+  return res.json();
 }
 
-/** 스냅샷 전송 */
-export function postSnapshot(imageBase64) {
-  return request('/snapshot', {
-    method: 'POST',
-    body: JSON.stringify({ image_base64: imageBase64 }),
-  });
-}
-
-/** 이벤트 로그 조회 */
-export function getEvents(limit = 20) {
-  return request(`/events?limit=${limit}`);
+export async function getNotifications(studentId) {
+  const res = await fetch(`${API_URL}/notifications?student_id=${studentId}`);
+  return res.json();
 }

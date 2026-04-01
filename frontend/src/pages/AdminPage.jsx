@@ -1,219 +1,171 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { getSeats, getEvents, postSnapshot } from '../api';
-import { POLLING_INTERVAL, SNAPSHOT_INTERVAL, getStatusColor } from '../constants';
+import React, { useState, useEffect, useRef } from 'react';
+import { getSeats, sendSnapshot } from '../api';
+import SeatCard from '../components/SeatCard';
 
-export default function AdminPage() {
+function AdminPage() {
   const [seats, setSeats] = useState([]);
-  const [events, setEvents] = useState([]);
-  const [error, setError] = useState('');
   const [cameraActive, setCameraActive] = useState(false);
-  const [cameraError, setCameraError] = useState('');
   const [lastResult, setLastResult] = useState(null);
-
+  const [log, setLog] = useState([]);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const streamRef = useRef(null);
-  const snapshotTimerRef = useRef(null);
+  const intervalRef = useRef(null);
 
-  const fetchData = useCallback(async () => {
-    try {
-      const [seatsData, eventsData] = await Promise.all([getSeats(), getEvents()]);
-      setSeats(seatsData);
-      setEvents(eventsData);
-      setError('');
-    } catch (e) {
-      setError(e.message);
-    }
+  // 10초마다 좌석 조회
+  useEffect(() => {
+    fetchSeats();
+    const interval = setInterval(fetchSeats, 10000);
+    return () => clearInterval(interval);
   }, []);
 
-  useEffect(() => {
-    fetchData();
-    const id = setInterval(fetchData, POLLING_INTERVAL);
-    return () => clearInterval(id);
-  }, [fetchData]);
+const prevSeatsRef = useRef([]);
 
-  const captureAndSend = useCallback(async () => {
-    if (!videoRef.current || !canvasRef.current) return;
+  async function fetchSeats() {
+    try {
+      const data = await getSeats();
+      
+      // 이전 상태와 비교해서 변화가 있으면 로그 추가
+      if (prevSeatsRef.current.length > 0) {
+        data.forEach(seat => {
+          const prev = prevSeatsRef.current.find(s => s.seat_id === seat.seat_id);
+          if (prev && prev.status !== seat.status) {
+            addLog(`🔄 ${seat.seat_id}: ${prev.status} → ${seat.status}`);
+          }
+          if (prev && prev.absence_count !== seat.absence_count && seat.absence_count > 0) {
+            addLog(`⏱️ ${seat.seat_id}: 부재 ${seat.absence_count}회`);
+          }
+        });
+      }
+      
+      prevSeatsRef.current = data;
+      setSeats(data);
+    } catch (e) {
+      console.error('좌석 조회 실패:', e);
+    }
+  }
+
+  // 카메라 시작
+  async function startCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' }
+      });
+      videoRef.current.srcObject = stream;
+      setCameraActive(true);
+
+      // 30초마다 자동 스냅샷
+      intervalRef.current = setInterval(captureAndAnalyze, 10000);
+      // 시작하자마자 한 번 실행
+      setTimeout(captureAndAnalyze, 2000);
+    } catch (e) {
+      alert('카메라 접근 실패: ' + e.message);
+    }
+  }
+
+  // 카메라 중지
+  function stopCamera() {
+    if (videoRef.current?.srcObject) {
+      videoRef.current.srcObject.getTracks().forEach(t => t.stop());
+    }
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+    setCameraActive(false);
+  }
+
+  // 스냅샷 촬영 + AI 분석
+  async function captureAndAnalyze() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0);
-    const base64 = canvas.toDataURL('image/jpeg', 0.8);
+
+    const imageBase64 = canvas.toDataURL('image/jpeg', 0.7);
+
+    addLog('AI 분석 중...');
+
     try {
-      const result = await postSnapshot(base64);
+      const result = await sendSnapshot(imageBase64);
       setLastResult(result);
-      await fetchData();
-    } catch (e) {
-      setError(e.message);
-    }
-  }, [fetchData]);
+      fetchSeats();
 
-  const startCamera = async () => {
-    setCameraError('');
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+      if (result.results) {
+        result.results.forEach(r => {
+          addLog(`좌석 ${r.seat_id}: 사람=${r.person ? '✅' : '❌'}, 짐=${r.stuff ? '✅' : '❌'}, ${r.previous_status}→${r.new_status} (${r.action})`);
+        });
       }
-      setCameraActive(true);
-      snapshotTimerRef.current = setInterval(captureAndSend, SNAPSHOT_INTERVAL);
     } catch (e) {
-      setCameraError('카메라 접근이 거부되었습니다. 브라우저 설정에서 카메라 권한을 허용해주세요.');
+      addLog('❌ AI 분석 실패: ' + e.message);
     }
-  };
+  }
 
-  const stopCamera = () => {
-    if (snapshotTimerRef.current) {
-      clearInterval(snapshotTimerRef.current);
-      snapshotTimerRef.current = null;
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-    setCameraActive(false);
-    setLastResult(null);
-  };
-
-  useEffect(() => {
-    return () => stopCamera();
-  }, []);
+  function addLog(msg) {
+    const time = new Date().toLocaleTimeString('ko-KR');
+    setLog(prev => [`[${time}] ${msg}`, ...prev].slice(0, 50));
+  }
 
   return (
-    <div style={{ maxWidth: 1000, margin: '0 auto', padding: 24 }}>
-      <h2>관리자 대시보드</h2>
+    <div style={{ padding: '20px', maxWidth: '1000px', margin: '0 auto' }}>
+      <h1>🖥️ 관리자 대시보드</h1>
 
-      {error && (
-        <div role="alert" style={{ color: '#f44336', marginBottom: 12 }}>
-          {error}
-        </div>
-      )}
-
-      {/* 좌석 대시보드 */}
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
-        {seats.map((seat) => (
-          <div
-            key={seat.seat_id}
-            style={{
-              border: '2px solid #ddd',
-              borderRadius: 12,
-              padding: 20,
-              width: 200,
-              background: getStatusColor(seat.status),
-              color: seat.status === 'RESERVED' ? '#333' : '#fff',
-            }}
-          >
-            <h3 style={{ margin: '0 0 8px' }}>좌석 {seat.seat_id}</h3>
-            <p style={{ margin: '4px 0' }}>상태: {seat.status}</p>
-            {seat.student_name && (
-              <p style={{ margin: '4px 0' }}>
-                예약자: {seat.student_name} ({seat.student_id})
-              </p>
-            )}
-            <p style={{ margin: '4px 0' }}>경고: {seat.warning_count}회</p>
-          </div>
+      {/* 좌석 카드들 */}
+      <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '30px' }}>
+        {seats.map(seat => (
+          <SeatCard key={seat.seat_id} seat={seat} isAdmin={true} />
         ))}
       </div>
 
-      {/* 카메라 영역 */}
-      <div style={{ marginBottom: 24 }}>
-        <h3>카메라 모니터링</h3>
-        {cameraError && (
-          <div role="alert" style={{ color: '#f44336', marginBottom: 8 }}>
-            {cameraError}
-          </div>
+      {/* 카메라 섹션 */}
+      <h2>📹 카메라 모니터링</h2>
+      <div style={{ marginBottom: '20px' }}>
+        {!cameraActive ? (
+          <button onClick={startCamera}
+            style={{ padding: '12px 24px', fontSize: '16px', cursor: 'pointer',
+                     backgroundColor: '#4caf50', color: 'white', border: 'none',
+                     borderRadius: '6px' }}>
+            카메라 시작
+          </button>
+        ) : (
+          <button onClick={stopCamera}
+            style={{ padding: '12px 24px', fontSize: '16px', cursor: 'pointer',
+                     backgroundColor: '#f44336', color: 'white', border: 'none',
+                     borderRadius: '6px' }}>
+            카메라 중지
+          </button>
         )}
-        <div style={{ marginBottom: 8 }}>
-          {!cameraActive ? (
-            <button onClick={startCamera} style={{ padding: '8px 20px', cursor: 'pointer' }}>
-              카메라 시작
-            </button>
-          ) : (
-            <button onClick={stopCamera} style={{ padding: '8px 20px', cursor: 'pointer' }}>
-              카메라 중지
-            </button>
-          )}
-        </div>
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          style={{
-            width: '100%',
-            maxWidth: 640,
-            background: '#000',
-            borderRadius: 8,
-            display: cameraActive ? 'block' : 'none',
-          }}
-        />
-        <canvas ref={canvasRef} style={{ display: 'none' }} />
+        <button onClick={captureAndAnalyze}
+          disabled={!cameraActive}
+          style={{ marginLeft: '10px', padding: '12px 24px', fontSize: '16px',
+                   cursor: cameraActive ? 'pointer' : 'not-allowed',
+                   backgroundColor: cameraActive ? '#2196f3' : '#ccc',
+                   color: 'white', border: 'none', borderRadius: '6px' }}>
+          수동 촬영
+        </button>
       </div>
 
-      {/* 최근 분석 결과 */}
-      {lastResult && (
-        <div style={{ marginBottom: 24 }}>
-          <h3>최근 분석 결과</h3>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            {Object.entries(lastResult).map(([seatId, r]) => (
-              <div
-                key={seatId}
-                style={{
-                  border: '1px solid #ccc',
-                  borderRadius: 8,
-                  padding: 12,
-                  minWidth: 160,
-                  background: r.error ? '#ffebee' : '#e8f5e9',
-                }}
-              >
-                <strong>{seatId}</strong>
-                {r.error ? (
-                  <p style={{ color: '#f44336', margin: '4px 0' }}>{r.error}</p>
-                ) : (
-                  <>
-                    <p style={{ margin: '4px 0' }}>사람: {r.person_detected ? '감지' : '미감지'}</p>
-                    <p style={{ margin: '4px 0' }}>짐: {r.stuff_detected ? '있음' : '없음'}</p>
-                    <p style={{ margin: '4px 0' }}>→ {r.action}</p>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <video ref={videoRef} autoPlay playsInline muted
+        style={{ width: '100%', maxWidth: '600px', borderRadius: '8px',
+                 display: cameraActive ? 'block' : 'none' }} />
+      <canvas ref={canvasRef} style={{ display: 'none' }} />
 
       {/* 이벤트 로그 */}
-      <div>
-        <h3>이벤트 로그</h3>
-        {events.length === 0 ? (
-          <p style={{ color: '#999' }}>이벤트가 없습니다.</p>
+      <h2>📋 이벤트 로그</h2>
+      <div style={{
+        maxHeight: '300px', overflowY: 'auto', backgroundColor: '#1e1e1e',
+        color: '#00ff00', padding: '12px', borderRadius: '8px',
+        fontFamily: 'monospace', fontSize: '13px'
+      }}>
+        {log.length === 0 ? (
+          <p style={{ color: '#666' }}>카메라를 시작하면 로그가 표시됩니다.</p>
         ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ borderBottom: '2px solid #ddd', textAlign: 'left' }}>
-                <th style={{ padding: 8 }}>시간</th>
-                <th style={{ padding: 8 }}>좌석</th>
-                <th style={{ padding: 8 }}>이벤트</th>
-                <th style={{ padding: 8 }}>상세</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map((ev, i) => (
-                <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
-                  <td style={{ padding: 8, fontSize: 13 }}>{ev.updated_at}</td>
-                  <td style={{ padding: 8 }}>{ev.seat_id}</td>
-                  <td style={{ padding: 8 }}>{ev.event_type}</td>
-                  <td style={{ padding: 8, fontSize: 13 }}>{ev.event_detail}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          log.map((l, i) => <div key={i}>{l}</div>)
         )}
       </div>
     </div>
   );
 }
+
+export default AdminPage;
