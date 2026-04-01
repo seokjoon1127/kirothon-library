@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.VITE_API_URL || 'https://hqhl33cpyc.execute-api.us-east-1.amazonaws.com/prod';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
 export async function getSeats() {
   const res = await fetch(`${API_URL}/seats`);
